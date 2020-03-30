@@ -1,171 +1,215 @@
-# Implemented body rate control in C++.
-#### The controller should be a proportional controller on body rates to commanded moments. The controller should take into account the moments of inertia of the drone when calculating the commanded moments.
+# Step 1: Sensor Noise
+## Determine the standard deviation of the measurement noise of both GPS X data and Accelerometer X data.
 
-Implemented a simple P controller that took desired roll, pitch, yaw rates in `V3F pqrCmd` and actual roll pitch yaw rates in `V3F pqr` to get the rotational accelerations $\dot p , \dot q , \dot r$
+#### The calculated standard deviation should correctly capture ~68% of the sensor measurements. Your writeup should describe the method used for determining the standard deviation given the simulated sensor measurements.
 
-Then multiplied each acceleration with the moment of intertia for each respective axis, to get commanded moments `momentCmd` ($M_x, M_y, M_z$)
+The simulated measurements were logged into a csv in the config/log/ folder. 
 
-```
-V3F moment_intertia(Ixx, Iyy, Izz);
-V3F momentCmd = moment_intertia * kpPQR * (pqrCmd - pqr);
-return momentCmd;
-```
+In the config folder, a jupyter notebook called ```Find-Standard-Deviations.ipynb``` was created to read all the numbers in the log files (Graph1.txt and Graph2.txt) into a list of floating point numbers using the ```import csv``` library. ```numpy``` was then used to calculate the standard deviation from the list of numbers.
 
-Tuned `kpPQR` in `QuadControlParams.txt` to get the vehicle to stop spinning quickly but not overshoot
-```
-kpPQR = 60,70,15
-```
+The code can bee seen bellow: 
+![jupyter notebook](images\notebook.PNG)
 
-
-# Implement roll pitch control in C++.
-#### The controller should use the acceleration and thrust commands, in addition to the vehicle attitude to output a body rate command. The controller should account for the non-linear transformation from local accelerations to body rates. Note that the drone's mass should be accounted for when calculating the target angles.
-
-In the function `RollPitchControl`:
-1. Calculated total acceleration c by dividing `-collThrustCmd` ($F_{total}$) by mass 
-2. $$\begin{pmatrix} b^x_c \\ b^y_c \end{pmatrix} = \frac{1}{c}\begin{pmatrix} \ddot{x} \\ \ddot{y} \end{pmatrix} $$
-3. $$\begin{pmatrix} b^x_a \\ b^y_a \end{pmatrix} = \begin{pmatrix} R_{13} \\ R_{23} \end{pmatrix} $$
-4. Use a P controller with the commanded and actual $b^x$ and $b^y$ to calculate $\dot{b^x_c}$ and $\dot{b^y_c}$
-5. Using $\dot{b^x_c}$ and $\dot{b^y_c}$, calculate $p_c$ and $q_c$ with equation 
-$$
-\begin{pmatrix} p_c \\ q_c \\ \end{pmatrix}  = \frac{1}{R_{33}}\begin{pmatrix} R_{21} & -R_{11} \\ R_{22} & -R_{12} \end{pmatrix} \times \begin{pmatrix} \dot{b}^x_c \\ \dot{b}^y_c  \end{pmatrix} 
-$$
+It outputs the std dev for both GPS and IMU, and those values are then copied to ```06_SensorNoise.txt``` as seen below:
 
 ```
-V3F pqrCmd;
+### STUDENT SECTION
 
-Mat3x3F R = attitude.RotationMatrix_IwrtB();
+MeasuredStdDev_GPSPosXY = 0.6761277422686578
+MeasuredStdDev_AccelXY = 0.48268567998594486
 
-float c = -collThrustCmd / mass;
-float b_x_c = CONSTRAIN(accelCmd[0] / c, -maxTiltAngle, maxTiltAngle);
-float b_y_c = CONSTRAIN(accelCmd[1] / c, -maxTiltAngle, maxTiltAngle);
-float b_x_a = R(0,2);
-float b_y_a = R(1,2);
-float b_dot_x_c = kpBank * (b_x_c - b_x_a);
-float b_dot_y_c = kpBank * (b_y_c - b_y_a);
-
-pqrCmd[0] = (R(1,0) * b_dot_x_c - R(0, 0) * b_dot_y_c)/R(2,2);
-pqrCmd[1] = (R(1,1) * b_dot_x_c - R(0, 1) * b_dot_y_c)/R(2,2);
-
-return pqrCmd;
-```
-Tuned `kpBank` in `QuadControlParams.txt` to minimize settling time but avoid too much overshoot
-
-```
-kpBank = 14
+### END STUDENT SECTION
 ```
 
-# Implement altitude controller in C++.
-#### The controller should use both the down position and the down velocity to command thrust. Ensure that the output value is indeed thrust (the drone's mass needs to be accounted for) and that the thrust includes the non-linear effects from non-zero roll/pitch angles.
+# Step 2: Attitude Estimation
+# Implement a better rate gyro attitude integration scheme in the UpdateFromIMU() function.
 
-Implemented a cascaded P controller (with integrated error) to calculated desired altitude acceleration $\ddot{z}_c$ given $z_t, \dot{z_t}, \ddot{z_t}, z_a, \dot{z_a}, dt$ 
+#### The improved integration scheme should result in an attitude estimator of < 0.1 rad for each of the Euler angles for a duration of at least 3 seconds during the simulation. The integration scheme should use quaternions to improve performance over the current simple integration scheme.
 
-Once $\ddot{z_c}$ is calculated, calculate total `thurst` $F_{total}$ given equation 
+Initialize a quaternion from the estimated attitude (consisting of rollEst, pitchEst, and ekfState(6)). Then call the IntergrateBodyRate function provided by the Quaternion class, passing in the turn rates in the body from (gyro measurements), and the delta t (dtIMU).
 
-$$F_{total} = \frac {(g-\ddot{z_c}) * m} {R_{33}}$$
+After intergrating, just initalize the new predicted attitude angles by calling the Quaternion's Pitch, Roll, Yaw functions. 
 
-where $m$ is the drone mass, $g$ is the acceleration of gravity, and , $R$ is the rotation matrix derived from the attitude of the drone
-
-```
-float g = 9.81;
-float e = (posZCmd - posZ);
-float z_dot_t = CONSTRAIN(kpPosZ * e + velZCmd, -maxAscentRate, maxDescentRate);
-integratedAltitudeError += e * dt;
-float z_dot_dot = kpVelZ * (z_dot_t - velZ) + KiPosZ*integratedAltitudeError + accelZCmd;
-thrust = -(z_dot_dot -g) * mass / R(2,2);
-```
-
-Tuned parameters `kpPosZ` and `kpVelZ` in file `QuadControlParams.txt` 
+These predicted angles will then be used for the complementary filter implemented in the rest of the function UpdateFromIMU().
 
 ```
-kpPosZ = 3
-kpVelZ = 10
+Quaternion<float> attitude = EstimatedAttitude();
+attitude.IntegrateBodyRate(gyro, dtIMU);
+
+float predictedPitch = attitude.Pitch();
+float predictedRoll = attitude.Roll();
+ekfState(6) = attitude.Yaw();	// yaw
 ```
 
-#### Additionally, the C++ altitude controller should contain an integrator to handle the weight non-idealities presented in scenario 4.
+# Step 3: Prediction Step
+## Implement all of the elements of the prediction step for the estimator.
 
-Implemented a I (integrated) part of the controller that would update the integrated altitude error for each call and add it to the controller. 
+#### The prediction step should include the state update element (PredictState() function), a correct calculation of the Rgb prime matrix, and a proper update of the state covariance. The acceleration should be accounted for as a command in the calculation of gPrime. The covariance update should follow the classic EKF update equation.
 
+### Implement ```PredictState(VectorXf curState, float dt, V3F accel, V3F gyro)``` Function 
+
+Essentially, write code to implement the g function as described in the paper: 
+![g function](images\g_func.PNG)
+Which is essentially linear approximation for all components of the state, but u_t is in the body frame, so it needs to be converted into the global frame by multiplying Rbg and u_t together to get the u_t (acceleration) in the global frame.
+
+In the code, this is done by: 
 ```
-integratedAltitudeError += e * dt;
-float z_dot_dot = kpVelZ * (z_dot_t - velZ) + KiPosZ*integratedAltitudeError + accelZCmd;
-```
-
-Tuned `KiPosZ` in file `QuadControlParams.txt` to be = 25.
-
-# Implement lateral position control in C++.
-
-#### The controller should use the local NE position and velocity to generate a commanded local acceleration.
-
-In function `LateralPositionControl`, parameters: 
-- `V3F posCmd` is a vector of 3 containing $x_t, y_t, z_a$ 
-- `V3F velCmd`is a vector of 3 containing $\dot{x}_t, \dot{y}_t, 0$
-- `V3F pos` is a vector of 3 containing $x_a, y_a, z_a$ 
-- `V3F vel` is a vector of 3 containing  $\dot{x}_a, \dot{y}_a, 0$
-- `V3F accelCmdFF` is a vector of 3 containing $\ddot{x}_t, \ddot{y}_t, 0$ 
-
-** Note that the z of posCmd is equal to z of pos
-
-Implemented a cascaded P controller to calculated desired lateral x acceleration $\ddot{x}_c$ given $x_t, \dot{x_t}, \ddot{x_t}, x_a, \dot{x_a}$ 
-
-Implemented a cascaded P controller to calculated desired lateral y acceleration $\ddot{y}_c$ given $y_t, \dot{y_t}, \ddot{y_t}, y_a, \dot{y_a}$ 
-
-```
-float x_dot_t = CONSTRAIN(kpPosXY * (posCmd[0] - pos[0]) + velCmd[0], -maxSpeedXY, maxSpeedXY);
-float y_dot_t = CONSTRAIN(kpPosXY * (posCmd[1] - pos[1]) + velCmd[1], -maxSpeedXY, maxSpeedXY);
-
-//printf("%f, %f, %f, %f, %f, %f\n", posCmd[0], pos[0], velCmd[0], posCmd[1], pos[1], velCmd[1]);
-
-V3F vel_t = V3F(x_dot_t, y_dot_t, 0);
-
-accelCmd += kpVelXY * (vel_t - vel);
-accelCmd[0] = CONSTRAIN(accelCmd[0], -maxAccelXY, maxAccelXY);
-accelCmd[1] = CONSTRAIN(accelCmd[1], -maxAccelXY, maxAccelXY);
+V3F global_accel = attitude.Rotate_BtoI(accel); \\ converting accel from body frame to global frame using Rotate_BtoI()
 ```
 
-Tuned parameters `kpPosXY` and `kpVelXY` in file `QuadControlParams.txt` 
+Then linear approximation is done to all variables, keeping in mind to subtract g*dt for predicting z_dot:
+```
+predictedState[0] = curState[0] + curState[3] * dt;
+predictedState[1] = curState[1] + curState[4] * dt;
+predictedState[2] = curState[2] + curState[5] * dt;
+predictedState[3] = curState[3] + global_accel.x * dt;
+predictedState[4] = curState[4] + global_accel.y * dt;
+predictedState[5] = curState[5] - CONST_GRAVITY * dt + global_accel.z * dt;
+```
+
+### Implement ```GetRbgPrime(float roll, float pitch, float yaw)``` Function 
+Just implement code to set all values of the 3x3 matrix to the following equation in the paper: 
+![rbg prime](images\rbgprime.PNG)
 
 ```
+RbgPrime(0, 0) = -cos(pitch) * sin(yaw);
+RbgPrime(0, 1) = -sin(roll) * sin(pitch) * sin(yaw) - cos(roll) * cos(yaw);
+RbgPrime(0, 2) = -cos(roll) * sin(pitch) * sin(yaw) + sin(roll) * cos(yaw);
+RbgPrime(1, 0) = cos(pitch) * sin(yaw);
+RbgPrime(1, 1) = sin(roll) * sin(pitch) * sin(yaw) - cos(roll) * cos(yaw);
+RbgPrime(1, 2) = cos(roll) * sin(pitch) * sin(yaw) + sin(roll) * cos(yaw);
+```
+### Implement ```Predict(float dt, V3F accel, V3F gyro)``` Function 
+
+#### The Predict method already calls predict state, so you only need to calculate the new covariance.
+
+First create the Jacobian, g_prime, according to the equation in the paper:
+![g prime](images\g_prime.PNG)
+
+```
+// we've created an empty Jacobian for you, currently simply set to identity
+  MatrixXf gPrime(QUAD_EKF_NUM_STATES, QUAD_EKF_NUM_STATES);
+  gPrime.setIdentity();
+
+  ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+  
+  // create Jacobian 
+
+  gPrime(0, 3) = dt;
+  gPrime(1, 4) = dt;
+  gPrime(2, 5) = dt;
+
+  Mat3x3F RbgP = Mat3x3F();
+  for (int i = 0; i < 3; i++)
+  {
+      for (int j = 0; j < 3; j++)
+      {
+          RbgP(i, j) = RbgPrime(i, j);
+      }
+  }
+
+  V3F partial = RbgP * accel * dt;
+
+  for (int i = 0; i < 3; i++)
+  {
+      gPrime(6, 3 + i) = partial[i];
+  }
+```
+
+Then, using the equation for predicting the covariance, write the code for it.
+
+![Equation for Predicting Covariance in EKF](images\predict_covar.png)
+
+```
+MatrixXf newCov = gPrime * ekfCov * gPrime.transpose() + Q;
+ekfCov = newCov;
+```
+
+# Step 4: Magnetometer Update
+## Implement the magnetometer update.
+#### The update should properly include the magnetometer data into the state. Note that the solution should make sure to correctly measure the angle error between the current state and the magnetometer value (error should be the short way around, not the long way).
+
+Using the equation for magnetometer in the paper:
+![Magnetometer Equation](images/magnetometer_equation.PNG)
+Calculate h'(x) and the measurement from the state h(x):
+
+```
+VectorXf z(1), zFromX(1);
+z(0) = magYaw;
+
+MatrixXf hPrime(1, QUAD_EKF_NUM_STATES);
+hPrime.setZero();
+
+////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+
+// set h'(x)
+hPrime(0, 6) = 1;
+
+// set h(x)
+zFromX(0) = ekfState(6);
+```
+
+#### Note that the solution should make sure to correctly measure the angle error between the current state and the magnetometer value (error should be the short way around, not the long way).
+
+Implement code to account for measure error.
+
+```
+float err = z(0) - zFromX(0);
+if (err > F_PI) zFromX(0) += 2.f * F_PI;
+if (err < -F_PI) zFromX(0) -= 2.f * F_PI;
+```
+
+Then the update function is called with z, R_Mag, and the calculated zFromX and hPrime: ```Update(z, hPrime, R_Mag, zFromX);```
+
+# Step 5: Closed Loop + GPS Update
+## Implement the GPS update.
+#### The estimator should correctly incorporate the GPS information to update the current state estimate.
+
+Using the equation for GPS in the paper:
+![GPS Equation](images/gps_equation.PNG)
+Calculate h'(x) and the measurement from the state h(x):
+
+```
+MatrixXf hPrime(6, QUAD_EKF_NUM_STATES);
+hPrime.setZero();
+
+////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+
+for (int i = 0; i < 6; i++)
+{
+    hPrime(i, i) = 1;
+    zFromX(i) = ekfState(i);
+}
+```
+
+Then the update function is called with z, R_GPS, and the calculated zFromX and hPrime: ```Update(z, hPrime, R_GPS, zFromX);```
+
+# Step 6: Adding Your Controller
+## De-tune your controller to successfully fly the final desired box trajectory with your estimator and realistic sensors.
+#### The controller developed in the previous project should be de-tuned to successfully meet the performance criteria of the final scenario (<1m error for entire box flight).
+
+QuadControl.cpp and QuadControlParams.txt were copied over and then retuned to work with sensor estimation. 
+
+Params were tuned to: 
+
+```
+# Position control gains
 kpPosXY = 3
-kpVelXY = 12
+kpPosZ = 4
+KiPosZ = 30
+
+# Velocity control gains
+kpVelXY = 9
+kpVelZ = 12
+
+# Angle control gains
+kpBank = 14
+kpYaw = 4
+
+# Angle rate gain
+kpPQR = 55, 55, 10
 ```
 
-# Implement yaw control in C++.
+Below is the output of scenario 11 with the tuned params and controllers implemented:
 
-#### The controller can be a linear/proportional heading controller to yaw rate commands (non-linear transformation not required).
-
-In the function `YawControl`, implemented a simple P controller to control the yaw of the drone, with inputting the desired and acutal yaw angles $\psi_c$ and $\psi$, and outputting $\dot\psi$, the commanded yaw rate. 
-
-`yawRateCmd = kpYaw * (yawCmd - yaw);`
-
-Tuned parameters `kpYaw` and the 3rd (z) component of `kpPQR` in file `QuadControlParams.txt`
-```
-kpYaw = 3
-kpPQR = 60,70,20
-```
-
-
-# Implement calculating the motor commands given commanded thrust and moments in C++.
-
-#### The thrust and moments should be converted to the appropriate 4 different desired thrust forces for the moments. Ensure that the dimensions of the drone are properly accounted for when calculating thrust from moments.
-
-Using the system of equations below, solved for the respective $F_1 , F_2 , F_3 , F_4$
-
-$$
-\begin{pmatrix} 1 & 1 & 1 & 1 \\ 1 & -1 & -1 & 1 \\ 1 & 1 & -1 & -1\\ 1 & -1 & 1 & -1 \end{pmatrix} \times \begin{pmatrix} F_1 \\ F_2 \\ F_3\\ F_4 \end{pmatrix} = \begin{pmatrix} F_{total} \\ M_x / l \\ M_y / l \\ - M_z / \Kappa \end{pmatrix}
-$$
-
-In the function `GenerateMotorCommands`, $F_{total}$ is a parameter called `collThrustCmd`, while $M_x, M_y, M_z$ (moments about each axis) is represented as a V3F parameter that contains all moments called `momentCmd`
-
-```
-float l = L / (sqrt(2));
-float a = momentCmd.x / l;
-float b = momentCmd.y / l;
-float c = -momentCmd.z / kappa;
-
-cmd.desiredThrustsN[0] = CONSTRAIN((collThrustCmd + a + b + c)/4.0, minMotorThrust, maxMotorThrust);
-cmd.desiredThrustsN[1] = CONSTRAIN((collThrustCmd - a + b - c)/4.0, minMotorThrust, maxMotorThrust);
-cmd.desiredThrustsN[2] = CONSTRAIN((collThrustCmd + a - b - c)/4.0, minMotorThrust, maxMotorThrust);
-cmd.desiredThrustsN[3] = CONSTRAIN((collThrustCmd - a - b + c)/4.0, minMotorThrust, maxMotorThrust);
-
-return cmd;
-```
+![final simulation output](images\gps_with_controls.PNG)
