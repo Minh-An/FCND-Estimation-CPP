@@ -33,7 +33,7 @@ kpBank = 14
 kpYaw = 4
 
 # Angle rate gain
-kpPQR = 50, 50, 10
+kpPQR = 55, 55, 10
 
 # limits
 maxAscentRate = 5
