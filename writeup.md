@@ -8,7 +8,7 @@ The simulated measurements were logged into a csv in the config/log/ folder.
 In the config folder, a jupyter notebook called ```Find-Standard-Deviations.ipynb``` was created to read all the numbers in the log files (Graph1.txt and Graph2.txt) into a list of floating point numbers using the ```import csv``` library. ```numpy``` was then used to calculate the standard deviation from the list of numbers.
 
 The code can bee seen bellow: 
-![jupyter notebook](images\notebook.PNG)
+![jupyter notebook](images/notebook.PNG)
 
 It outputs the std dev for both GPS and IMU, and those values are then copied to ```06_SensorNoise.txt``` as seen below:
 
@@ -49,7 +49,7 @@ ekfState(6) = attitude.Yaw();	// yaw
 ### Implement ```PredictState(VectorXf curState, float dt, V3F accel, V3F gyro)``` Function 
 
 Essentially, write code to implement the g function as described in the paper: 
-![g function](images\g_func.PNG)
+![g function](images/g_func.PNG)
 Which is essentially linear approximation for all components of the state, but u_t is in the body frame, so it needs to be converted into the global frame by multiplying Rbg and u_t together to get the u_t (acceleration) in the global frame.
 
 In the code, this is done by: 
@@ -69,7 +69,7 @@ predictedState[5] = curState[5] - CONST_GRAVITY * dt + global_accel.z * dt;
 
 ### Implement ```GetRbgPrime(float roll, float pitch, float yaw)``` Function 
 Just implement code to set all values of the 3x3 matrix to the following equation in the paper: 
-![rbg prime](images\rbgprime.PNG)
+![rbg prime](images/rbgprime.PNG)
 
 ```
 RbgPrime(0, 0) = -cos(pitch) * sin(yaw);
@@ -84,7 +84,7 @@ RbgPrime(1, 2) = cos(roll) * sin(pitch) * sin(yaw) + sin(roll) * cos(yaw);
 #### The Predict method already calls predict state, so you only need to calculate the new covariance.
 
 First create the Jacobian, g_prime, according to the equation in the paper:
-![g prime](images\g_prime.PNG)
+![g prime](images/g_prime.PNG)
 
 ```
 // we've created an empty Jacobian for you, currently simply set to identity
@@ -118,7 +118,7 @@ First create the Jacobian, g_prime, according to the equation in the paper:
 
 Then, using the equation for predicting the covariance, write the code for it.
 
-![Equation for Predicting Covariance in EKF](images\predict_covar.png)
+![Equation for Predicting Covariance in EKF](images/predict_covar.png)
 
 ```
 MatrixXf newCov = gPrime * ekfCov * gPrime.transpose() + Q;
@@ -212,4 +212,4 @@ kpPQR = 55, 55, 10
 
 Below is the output of scenario 11 with the tuned params and controllers implemented:
 
-![final simulation output](images\gps_with_controls.PNG)
+![final simulation output](images/gps_with_controls.PNG)
