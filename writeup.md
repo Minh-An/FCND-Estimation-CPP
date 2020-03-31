@@ -194,20 +194,20 @@ Params were tuned to:
 
 ```
 # Position control gains
-kpPosXY = 3
-kpPosZ = 4
-KiPosZ = 30
+kpPosXY = 2
+kpPosZ = 2
+KiPosZ = 9
 
 # Velocity control gains
 kpVelXY = 9
-kpVelZ = 12
+kpVelZ = 10
 
 # Angle control gains
-kpBank = 14
-kpYaw = 4
+kpBank = 12
+kpYaw = 3
 
-# Angle rate gain
-kpPQR = 55, 55, 10
+# Angle rate gains
+kpPQR = 70, 70, 15
 ```
 
 Below is the output of scenario 11 with the tuned params and controllers implemented:
